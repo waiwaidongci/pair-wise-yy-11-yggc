@@ -1,126 +1,92 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { useStore } from "./store";
+import { inspectionState, isOpen } from "./domain";
+import { QueueTab } from "./components/QueueTab";
+import { LedgerTab } from "./components/LedgerTab";
+import { CylindersTab } from "./components/CylindersTab";
+import { GasTab } from "./components/GasTab";
+import { RetestModal } from "./components/RetestModal";
 
-const project = {
-  "sourceNo": 5,
-  "id": "hxyfront-62010",
-  "port": 62010,
-  "title": "潜水气瓶充填记录",
-  "domain": "潜水气瓶充填",
-  "prompt": "我想做一个给潜水店使用的气瓶充填前端系统，工作人员可以记录气瓶编号、容积、检验有效期、残压、目标压力、氧含量、氦含量、充填方式和操作员。页面需要有待充填队列、混合气比例提示、气瓶检验过期提醒、充填完成签收和单个气瓶历史记录。",
-  "palette": [
-    "#075985",
-    "#0d9488",
-    "#f59e0b"
-  ],
-  "metrics": [
-    "待充填",
-    "过期提醒",
-    "平均氧含量",
-    "签收单"
-  ],
-  "filters": [
-    "空气",
-    "高氧",
-    "Trimix",
-    "待检验"
-  ],
-  "fields": [
-    "气瓶编号",
-    "容积",
-    "检验有效期",
-    "残压",
-    "目标压力",
-    "氧含量"
-  ],
-  "records": [
-    [
-      "TANK-204",
-      "12L铝瓶",
-      "残压55bar，目标200bar",
-      "空气充填"
-    ],
-    [
-      "TANK-219",
-      "11L钢瓶",
-      "EAN32",
-      "待客户签收"
-    ],
-    [
-      "TANK-231",
-      "双瓶组",
-      "检验期剩余12天",
-      "标记提醒"
-    ]
-  ]
-};
+type Tab = "queue" | "ledger" | "cylinders" | "gas";
+
+const TABS: Array<{ key: Tab; label: string }> = [
+  { key: "queue", label: "充填与复检" },
+  { key: "ledger", label: "记录台账" },
+  { key: "cylinders", label: "单瓶历史" },
+  { key: "gas", label: "气源批次" },
+];
 
 function App() {
+  const { state, actions } = useStore();
+  const [tab, setTab] = useState<Tab>("queue");
+  const [retestId, setRetestId] = useState<string | null>(null);
+
+  // 列表、统计、单瓶历史全部由同一份 fills 记录派生，刷新落盘后口径一致
+  const metrics = useMemo(() => {
+    const pending = state.fills.filter((f) => f.status === "待复测").length;
+    const frozen = state.fills.filter((f) => f.status === "已冻结").length;
+    const closed = state.fills.filter((f) => f.status === "已签收" || f.status === "返工").length;
+    const signed = state.fills.filter((f) => f.status === "已签收").length;
+    const rework = state.fills.filter((f) => f.status === "返工").length;
+    const expired = state.cylinders.filter((c) => {
+      const i = inspectionState(c.inspectionDue);
+      return i.state === "过期" || i.state === "临近";
+    }).length;
+    const rate = closed === 0 ? "—" : `${Math.round((signed / closed) * 100)}%`;
+    return { pending, frozen, expired, signed, rework, rate };
+  }, [state.fills, state.cylinders]);
+
+  const retestFill = retestId ? state.fills.find((f) => f.id === retestId && isOpen(f)) ?? null : null;
+
+  function openRetest(id: string) {
+    setRetestId(id);
+  }
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62010 · 潜水气瓶充填 — 静置稳压复检闭环</p>
+        <h1>潜水气瓶充填记录</h1>
+        <span>
+          每次充填记录压力、目标氧氦比例、完成时间、气源批次与操作员；同一气瓶仅保留一条待复测，重复提交沿用首次记录。
+          静置不足半小时、压降超 5bar 或氧氦偏差超限不得签收，只能转返工并写明超限项；气源停用冻结未签收复测，补录合格气源并重测后恢复。
+          已签收记录只可追加。
+        </span>
       </section>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[28, 6, 14, 91][index] ?? 10}</strong>
-          </article>
+        <article><small>待复测</small><strong>{metrics.pending}</strong></article>
+        <article><small>气源冻结</small><strong className={metrics.frozen ? "num-warn" : ""}>{metrics.frozen}</strong></article>
+        <article><small>检验到期提醒</small><strong className={metrics.expired ? "num-warn" : ""}>{metrics.expired}</strong></article>
+        <article><small>已签收 / 返工</small><strong>{metrics.signed}<em> / {metrics.rework}</em></strong></article>
+        <article><small>签收合格率</small><strong>{metrics.rate}</strong></article>
+      </section>
+
+      <nav className="tabs">
+        {TABS.map((t) => (
+          <button key={t.key} className={tab === t.key ? "tab-on" : ""} onClick={() => setTab(t.key)}>
+            {t.label}
+            {t.key === "queue" && metrics.pending + metrics.frozen > 0 && (
+              <span className="tab-badge">{metrics.pending + metrics.frozen}</span>
+            )}
+          </button>
         ))}
-      </section>
+      </nav>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}分类</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
+      {tab === "queue" && <QueueTab state={state} actions={actions} focusFillId={retestId} onOpenRetest={openRetest} />}
+      {tab === "ledger" && <LedgerTab state={state} />}
+      {tab === "cylinders" && <CylindersTab state={state} />}
+      {tab === "gas" && <GasTab state={state} actions={actions} />}
 
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>近期记录</p>
-            <h2>工作台摘要</h2>
-          </div>
-          <button>导出CSV</button>
-        </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      {retestFill && (
+        <RetestModal
+          fill={retestFill}
+          state={state}
+          actions={actions}
+          onClose={() => setRetestId(null)}
+        />
+      )}
     </main>
   );
 }
